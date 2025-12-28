@@ -1,0 +1,19 @@
+[package]
+name = "daily-prioritizer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Shared dependencies
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+
+# Calendar module dependencies
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9"
+anyhow = "1"
+
+# Notion module dependencies
+dotenvy = "0.15"
