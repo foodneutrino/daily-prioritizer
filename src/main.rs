@@ -5,6 +5,7 @@
 
 mod calendar;
 mod notion;
+mod waveshare;
 
 use anyhow::Result;
 use chrono::Local;
