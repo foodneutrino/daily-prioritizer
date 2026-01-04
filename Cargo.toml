@@ -17,7 +17,7 @@ log = "0.4"
 # to disable more strict security not available on esp32
 # ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 # Remove version 9.3 and use version 10
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "rsa", "pem", "use_pem"] }
 
 # esp32 deps
 esp-idf-sys = { version = "0.36", features = ["binstart"] }

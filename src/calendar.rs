@@ -80,8 +80,7 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     };
 
     let header = Header::new(Algorithm::RS256);
-    let encoding_key = EncodingKey::from_rsa_pem(key.private_key.as_bytes())
-        .context("Failed to parse private key")?;
+    let encoding_key = EncodingKey::from_rsa_pem(key.private_key.as_bytes())?;
 
     let jwt = encode(&header, &claims, &encoding_key).context("Failed to encode JWT")?;
 
