@@ -4,6 +4,10 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use embedded_svc::http::client::Client;
+use embedded_svc::http::Method;
+use embedded_svc::io::{Read, Write};
+use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -15,6 +19,7 @@ pub const WORK_END_HOUR: u32 = 17;
 pub const CALENDAR_ID: &str = "foodneutrino@gmail.com";
 pub const SERVICE_ACCOUNT_FILE: &str = "free-time-calc-7daa6babd0ae.json";
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_CREDS: &str = include_str!("../free-time-calc-7daa6babd0ae.json");
 
 #[derive(Debug, Deserialize)]
 struct ServiceAccountKey {
@@ -69,6 +74,13 @@ pub struct FreeSlot {
     pub end: NaiveDateTime,
 }
 
+fn create_http_client() -> Result<Client<EspHttpConnection>> {
+    let config = Configuration::default();
+    let connection = EspHttpConnection::new(&config)
+        .context("Failed to create HTTP connection")?;
+    Ok(Client::wrap(connection))
+}
+
 fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     let now = Utc::now().timestamp();
     let claims = Claims {
@@ -84,19 +96,38 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
 
     let jwt = encode(&header, &claims, &encoding_key).context("Failed to encode JWT")?;
 
-    let client = reqwest::blocking::Client::new();
-    let response: TokenResponse = client
-        .post(&key.token_uri)
-        .form(&[
-            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
-            ("assertion", &jwt),
-        ])
-        .send()
-        .context("Failed to request access token")?
-        .json()
+    let mut client = create_http_client()?;
+
+    // Build form-encoded body
+    let form_body = format!(
+        "grant_type={}&assertion={}",
+        urlencoded("urn:ietf:params:oauth:grant-type:jwt-bearer"),
+        urlencoded(&jwt)
+    );
+    let content_length = form_body.len().to_string();
+
+    let headers = [
+        ("Content-Type", "application/x-www-form-urlencoded"),
+        ("Content-Length", content_length.as_str()),
+    ];
+
+    let mut request = client.request(Method::Post, &key.token_uri, &headers)
+        .context("Failed to create token request")?;
+    request.write(form_body.as_bytes())
+        .context("Failed to get request writer")?;
+
+    let mut response = request.submit()
+        .context("Failed to request access token")?;
+
+    let mut body = Vec::new();
+    if response.status() == 200 {
+        response.read(&mut body)?;
+    }
+
+    let token_response: TokenResponse = serde_json::from_slice(&body)
         .context("Failed to parse token response")?;
 
-    Ok(response.access_token)
+    Ok(token_response.access_token)
 }
 
 pub fn get_credentials() -> Result<String> {
@@ -128,31 +159,40 @@ pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
     let time_min = format!("{}Z", start_of_day.format("%Y-%m-%dT%H:%M:%S"));
     let time_max = format!("{}Z", end_of_day.format("%Y-%m-%dT%H:%M:%S"));
 
+    // Build URL with query parameters
     let url = format!(
-        "https://www.googleapis.com/calendar/v3/calendars/{}/events",
-        urlencoded(CALENDAR_ID)
+        "https://www.googleapis.com/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
+        urlencoded(CALENDAR_ID),
+        urlencoded(&time_min),
+        urlencoded(&time_max)
     );
 
-    let client = reqwest::blocking::Client::new();
-    let response: EventsResponse = client
-        .get(&url)
-        .bearer_auth(access_token)
-        .query(&[
-            ("timeMin", time_min.as_str()),
-            ("timeMax", time_max.as_str()),
-            ("singleEvents", "true"),
-            ("orderBy", "startTime"),
-        ])
-        .send()
-        .context("Failed to fetch calendar events")?
-        .json()
+    let mut client = create_http_client()?;
+    let auth_header = format!("Bearer {}", access_token);
+    let headers = [
+        ("Authorization", auth_header.as_str()),
+    ];
+
+    let request = client.request(Method::Get, &url, &headers)
+        .context("Failed to create calendar request")?;
+    let mut response = request.submit()
+        .context("Failed to fetch calendar events")?;
+
+    let mut body = Vec::new();
+    if response.status() == 200 {
+        response.read(&mut body).context("Failed to read calendar response")?;
+    }
+
+    let events_response: EventsResponse = serde_json::from_slice(&body)
         .context("Failed to parse events response")?;
 
-    Ok(response.items.unwrap_or_default())
+    Ok(events_response.items.unwrap_or_default())
 }
 
 fn urlencoded(s: &str) -> String {
     s.replace("@", "%40")
+        .replace(":", "%3A")
+        .replace("+", "%2B")
 }
 
 pub fn parse_event_time(time: &Option<EventTime>) -> Option<NaiveDateTime> {

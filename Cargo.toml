@@ -10,8 +10,7 @@ rust-version = "1.77"
 # Shared dependencies
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "blocking"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
+# tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
 log = "0.4"
 
 # to disable more strict security not available on esp32
@@ -22,7 +21,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["rust_cry
 # esp32 deps
 esp-idf-sys = { version = "0.36", features = ["binstart"] }
 esp-idf-hal = "0.45"
-esp-idf-svc = "0.51"
+esp-idf-svc = { version = "0.51", features = ["native"] }
 embedded-svc = "0.28"
 esp_idf_logger = "0.1"
 

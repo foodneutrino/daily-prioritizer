@@ -1,12 +1,10 @@
-mod font;
-
 use esp_idf_hal::delay::FreeRtos;
-use esp_idf_hal::gpio::{Gpio9, Gpio10, Gpio11, Gpio12, Gpio13, Gpio14, Gpio46, Input, Output, PinDriver};
-use esp_idf_hal::peripherals::Peripherals;
-use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver, SpiDriverConfig, config::Config as SpiConfig};
+use esp_idf_hal::gpio::{Pins, Gpio9, Gpio10, Gpio11, Gpio12, Gpio13, Gpio14, Gpio46, Input, Output, PinDriver};
+use esp_idf_hal::spi::{SPI2, SpiDeviceDriver, SpiDriver, SpiDriverConfig, config::Config as SpiConfig};
 use esp_idf_hal::units::FromValueType;
+use esp_idf_hal::peripherals::Peripherals;
 use log::info;
-use font::FONT;
+use super::font::FONT;
 
 
 /// Display command constants for the Waveshare 4.2" e-Paper display
@@ -73,35 +71,52 @@ const LUT_ALL: [u8; 233] = [
 
 /// E-Paper Display driver for Waveshare 4.2" display
 pub struct Epd<'a> {
-    spi: SpiDeviceDriver<'a, SpiDriver<'a>>,
     cs_pin: PinDriver<'a, Gpio10, Output>,
     dc_pin: PinDriver<'a, Gpio9, Output>,
     reset_pin: PinDriver<'a, Gpio13, Output>,
     busy_pin: PinDriver<'a, Gpio14, Input>,
+    spi: SpiDeviceDriver<'a, SpiDriver<'a>>,
     width: u32,
     height: u32,
 }
 
 impl<'a> Epd<'a> {
     /// Create a new EPD instance with the given peripherals
-    pub fn new(
-        spi: SpiDeviceDriver<'a, SpiDriver<'a>>,
-        cs_pin: PinDriver<'a, Gpio10, Output>,
-        dc_pin: PinDriver<'a, Gpio9, Output>,
-        reset_pin: PinDriver<'a, Gpio13, Output>,
-        busy_pin: PinDriver<'a, Gpio14, Input>,
-    ) -> Self {
+    pub fn new(esp_pins: Pins, esp_spi: SPI2) -> Self {
+        let sck = esp_pins.gpio12; 
+        let mosi = esp_pins.gpio11;
+        let miso = esp_pins.gpio46;
+
+        // Control pins
+        let cs_pin = PinDriver::output(esp_pins.gpio10).unwrap();
+        let dc_pin = PinDriver::output(esp_pins.gpio9).unwrap();
+        let reset_pin = PinDriver::output(esp_pins.gpio13).unwrap();
+        let busy_pin = PinDriver::input(esp_pins.gpio14).unwrap();
+        // Initialize SPI
+        let spi_driver = SpiDriver::new(
+            esp_spi,
+            sck,
+            mosi,
+            Some(miso),
+            &SpiDriverConfig::default(),
+        ).unwrap();
+
+        let spi_config = SpiConfig::new()
+            .baudrate(20.MHz().into());
+
+        let spi_device = SpiDeviceDriver::new(spi_driver, None::<Gpio10>, &spi_config).unwrap();
+
+        info!("SPI Bus Initialized successfully!");
+
         let mut epd = Self {
-            spi,
             cs_pin,
             dc_pin,
             reset_pin,
             busy_pin,
+            spi: spi_device,
             width: 400,
             height: 300,
         };
-
-        info!("SPI Bus Initialized successfully!");
 
         // Initial power setup
         epd.send_command(commands::POWER_SETTING);
@@ -468,7 +483,7 @@ impl FrameBuffer {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn test_code() -> anyhow::Result<()> {
     // Initialize ESP-IDF
     esp_idf_svc::sys::link_patches();
     esp_idf_logger::init().unwrap();
@@ -478,32 +493,33 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
 
     // SPI pins
-    let sck = peripherals.pins.gpio12;
-    let mosi = peripherals.pins.gpio11;
-    let miso = peripherals.pins.gpio46;
+    // let sck = peripherals.pins.gpio12;
+    // let mosi = peripherals.pins.gpio11;
+    // let miso = peripherals.pins.gpio46;
 
     // Control pins
-    let cs_pin = PinDriver::output(peripherals.pins.gpio10)?;
-    let dc_pin = PinDriver::output(peripherals.pins.gpio9)?;
-    let reset_pin = PinDriver::output(peripherals.pins.gpio13)?;
-    let busy_pin = PinDriver::input(peripherals.pins.gpio14)?;
+    // let cs_pin = PinDriver::output(peripherals.pins.gpio10)?;
+    // let dc_pin = PinDriver::output(peripherals.pins.gpio9)?;
+    // let reset_pin = PinDriver::output(peripherals.pins.gpio13)?;
+    // let busy_pin = PinDriver::input(peripherals.pins.gpio14)?;
 
     // Initialize SPI
-    let spi_driver = SpiDriver::new(
-        peripherals.spi2,
-        sck,
-        mosi,
-        Some(miso),
-        &SpiDriverConfig::default(),
-    )?;
+    // let spi_driver = SpiDriver::new(
+    //     peripherals.spi2,
+    //     sck,
+    //     mosi,
+    //     Some(miso),
+    //     &SpiDriverConfig::default(),
+    // )?;
 
     let spi_config = SpiConfig::new()
         .baudrate(20.MHz().into());
 
-    let spi_device = SpiDeviceDriver::new(spi_driver, None::<Gpio10>, &spi_config)?;
+    // let spi_device = SpiDeviceDriver::new(spi_driver, None::<Gpio10>, &spi_config)?;
 
     // Create EPD instance
-    let mut epd = Epd::new(spi_device, cs_pin, dc_pin, reset_pin, busy_pin);
+    // let mut epd = Epd::new(sck, cs_pin, dc_pin, reset_pin, busy_pin);
+    let mut epd = Epd::new(peripherals.pins, peripherals.spi2);
 
     info!("Resetting the screen...");
     epd.init();
