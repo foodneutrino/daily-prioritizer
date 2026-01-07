@@ -153,21 +153,25 @@ fn main() -> Result<()> {
     const BLACK: u8 = 0x00;
     const WHITE: u8 = 0x01;
 
-    info!("Displaying 'Hello World!' on the screen...");
+    info!("Displaying tasks on the screen...");
     fb.fill(WHITE);
-    fb.text("Hello All Components", 30, 10, BLACK);
-    fb.pixel(30, 10, BLACK);
-    fb.hline(30, 30, 10, BLACK);
-    fb.vline(30, 50, 10, BLACK);
-    fb.line(30, 70, 40, 80, BLACK);
-    fb.rect(30, 90, 10, 10, BLACK);
-    fb.fill_rect(30, 110, 10, 10, BLACK);
-
-    for row in 0..36 {
-        let row_str = row.to_string();
-        fb.text(&row_str, 0, row * 8, BLACK);
+    fb.text("Current Tasks", 30, 10, BLACK);
+    let mut y = 20;
+    for task in &tasks {
+        fb.text(task, 10, y, BLACK);
+        y += 10;
     }
-    fb.text("Line 36", 0, 288, BLACK);
+    // fb.pixel(30, 10, BLACK);
+    // fb.hline(30, 30, 10, BLACK);
+    // fb.vline(30, 50, 10, BLACK);
+    // fb.line(30, 70, 40, 80, BLACK);
+    // fb.rect(30, 90, 10, 10, BLACK);
+    // fb.fill_rect(30, 110, 10, 10, BLACK);
+    // for row in 0..36 {
+    //     let row_str = row.to_string();
+    //     fb.text(&row_str, 0, row * 8, BLACK);
+    // }
+    // fb.text("Line 36", 0, 288, BLACK);
 
     epd.display(fb.buffer());
     epd.sleep();
