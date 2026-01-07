@@ -75,7 +75,11 @@ pub struct FreeSlot {
 }
 
 fn create_http_client() -> Result<Client<EspHttpConnection>> {
-    let config = Configuration::default();
+    let config = Configuration {
+        use_global_ca_store: true,
+        crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+        ..Default::default()
+    };
     let connection = EspHttpConnection::new(&config)
         .context("Failed to create HTTP connection")?;
     Ok(Client::wrap(connection))

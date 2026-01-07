@@ -495,7 +495,7 @@ fn test_code() -> anyhow::Result<()> {
     // SPI pins
     // let sck = peripherals.pins.gpio12;
     // let mosi = peripherals.pins.gpio11;
-    // let miso = peripherals.pins.gpio46;
+    // let miso = None;
 
     // Control pins
     // let cs_pin = PinDriver::output(peripherals.pins.gpio10)?;
@@ -547,8 +547,6 @@ fn test_code() -> anyhow::Result<()> {
         fb.text(&row_str, 0, row * 8, BLACK);
     }
     fb.text("Line 36", 0, 288, BLACK);
-
-    info!("Buffer content (first 512 bytes): {:?}", &fb.buffer()[..512]);
 
     epd.display(fb.buffer());
     epd.sleep();

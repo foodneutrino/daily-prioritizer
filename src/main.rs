@@ -84,39 +84,23 @@ fn fetch_calendar_events() {
 }
 
 /// Fetch and display active Notion tasks
-fn fetch_notion_tasks() {
+fn fetch_notion_tasks() -> Result<Vec<String>>{
     info!("--- Notion Tasks ---");
 
     let api_key = match option_env!("NOTION_API_KEY") {
         Some(key) => key,
         None => {
             info!("NOTION_API_KEY not set. Skipping Notion tasks.");
-            return;
+            return Err(anyhow::anyhow!("No Notion API Key"));
         }
     };
 
     info!("API Key found, querying Notion {}", api_key);
     let notion_client = notion::NotionClient::new(api_key);
 
-    let datasource_response = match notion_client.query_datasource(notion::SOURCE_ID, None) {
-        Ok(response) => response,
-        Err(e) => {
-            info!("Failed to query Notion datasource: {}", e);
-            return;
-        }
-    };
+    let datasource_response = notion_client.query_datasource(notion::SOURCE_ID, None)?;
 
-    let tasks = notion::extract_active_tasks(&datasource_response);
-
-    if !tasks.is_empty() {
-        info!("Active tasks (To Do / Doing):");
-        for task in &tasks {
-            info!("  - {}", task);
-        }
-        info!("\nTotal tasks: {}", tasks.len());
-    } else {
-        info!("No active tasks found!");
-    }
+    Ok(notion::extract_active_tasks(&datasource_response))
 }
 
 fn main() -> Result<()> {
@@ -142,7 +126,16 @@ fn main() -> Result<()> {
 
     // fetch_calendar_events();
     info!("\n{}", "-".repeat(50));
-    fetch_notion_tasks();
+    let tasks = fetch_notion_tasks()?;
+    if !tasks.is_empty() {
+        info!("Active tasks (To Do / Doing):");
+        for task in &tasks {
+            info!("  - {}", task);
+        }
+        info!("\nTotal tasks: {}", tasks.len());
+    } else {
+        info!("No active tasks found!");
+    }
 
     info!("\n{}", "=".repeat(50));
     info!("Daily planning complete!");
@@ -175,8 +168,6 @@ fn main() -> Result<()> {
         fb.text(&row_str, 0, row * 8, BLACK);
     }
     fb.text("Line 36", 0, 288, BLACK);
-
-    info!("Buffer content (first 512 bytes): {:?}", &fb.buffer()[..512]);
 
     epd.display(fb.buffer());
     epd.sleep();

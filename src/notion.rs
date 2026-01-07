@@ -3,9 +3,9 @@
 //! Provides synchronous access to the Notion API for querying databases, pages, and datasources.
 
 use anyhow::{Context, Result};
+use log::info;
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
-use embedded_svc::io::Read;
 use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use serde_json::{json, Value};
 
@@ -27,7 +27,11 @@ impl NotionClient {
     }
 
     fn create_client(&self) -> Result<Client<EspHttpConnection>> {
-        let config = Configuration::default();
+        let config = Configuration {
+            use_global_ca_store: true,
+            crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+            ..Default::default()
+        };
         let connection = EspHttpConnection::new(&config)
             .context("Failed to create HTTP connection")?;
         Ok(Client::wrap(connection))
@@ -71,26 +75,32 @@ impl NotionClient {
             ("Notion-Version", NOTION_API_VERSION),
         ];
 
+        info!("Making POST request to URL: {} with body: {}", url, body_str);
         let mut request = client.request(Method::Post, url, &headers)
             .context("Failed to create request")?;
         request.write(&body_str.as_bytes())
-        // let mut request = request.into_writer(body_str.len())
             .context("Failed to get request writer")?;
 
-        // use embedded_svc::io::Write;
-        
-        // request.write_all(body_str.as_bytes())
-            // .context("Failed to write request body")?;
-
-        let mut response = request.submit()
+        let mut response: esp_idf_svc::http::client::Response<&mut EspHttpConnection> = request.submit()
             .context("Failed to submit request")?;
 
-        let mut response_body = Vec::new();
-        if response.status() == 200 {
-            response.read(&mut response_body).context("Failed to read response body")?;
+        let mut buf = [0u8; 1024];
+        let mut response_body = Vec::<u8>::new();
+        info!("Response status: {}", response.status());
+
+        loop {
+            match response.read(&mut buf) {
+                Ok(0) => break,
+                Ok(len) => {
+                    info!("Read {} bytes from response", len);
+                    response_body.extend_from_slice(&buf[..len]);
+                }
+                Err(e) => {
+                    info!("Error reading response: {:?}", e);
+                    break;
+                }
+            }
         }
-        // response.read_to_end(&mut response_body)
-        //     .context("Failed to read response body")?;
 
         serde_json::from_slice(&response_body)
             .context("Failed to parse JSON response")

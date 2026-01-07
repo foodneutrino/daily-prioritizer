@@ -5,6 +5,6 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
 # This allows to use 1 ms granuality for thread sleeps (10 ms by default).
 CONFIG_FREERTOS_HZ=1000
 
-# Workaround for https://github.com/espressif/esp-idf/issues/7631
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
+# Enable certificate bundle for HTTPS connections
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
