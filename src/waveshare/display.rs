@@ -82,17 +82,16 @@ pub struct Epd<'a> {
 
 impl<'a> Epd<'a> {
     /// Create a new EPD instance with the given peripherals
-    pub fn new(esp_pins: Pins, esp_spi: SPI2) -> Self {
-        let sck = esp_pins.gpio12; 
-        let mosi = esp_pins.gpio11;
-        let miso = esp_pins.gpio46;
-
-        // Control pins
-        let cs_pin = PinDriver::output(esp_pins.gpio10).unwrap();
-        let dc_pin = PinDriver::output(esp_pins.gpio9).unwrap();
-        let reset_pin = PinDriver::output(esp_pins.gpio13).unwrap();
-        let busy_pin = PinDriver::input(esp_pins.gpio14).unwrap();
-        // Initialize SPI
+    pub fn new_explicit(
+        sck: Gpio12, 
+        mosi: Gpio11, 
+        miso: Gpio46, 
+        cs_pin: PinDriver<'a, Gpio10, Output>, 
+        dc_pin: PinDriver<'a, Gpio9, Output>, 
+        reset_pin: PinDriver<'a, Gpio13, Output>, 
+        busy_pin: PinDriver<'a, Gpio14, Input>, 
+        esp_spi: SPI2
+    ) -> Self {
         let spi_driver = SpiDriver::new(
             esp_spi,
             sck,
@@ -108,7 +107,7 @@ impl<'a> Epd<'a> {
 
         info!("SPI Bus Initialized successfully!");
 
-        let mut epd = Self {
+        Self {
             cs_pin,
             dc_pin,
             reset_pin,
@@ -116,15 +115,21 @@ impl<'a> Epd<'a> {
             spi: spi_device,
             width: 400,
             height: 300,
-        };
+        }
+    }
 
-        // Initial power setup
-        epd.send_command(commands::POWER_SETTING);
-        epd.send_command(commands::PLL_CONTROL);
-        epd.send_data(0x3C);
-        epd.send_command(commands::POWER_ON);
+    pub fn new(esp_pins: Pins, esp_spi: SPI2) -> Self {
+        let sck = esp_pins.gpio12; 
+        let mosi = esp_pins.gpio11;
+        let miso = esp_pins.gpio46;
 
-        epd
+        // Control pins
+        let cs_pin = PinDriver::output(esp_pins.gpio10).unwrap();
+        let dc_pin = PinDriver::output(esp_pins.gpio9).unwrap();
+        let reset_pin = PinDriver::output(esp_pins.gpio13).unwrap();
+        let busy_pin = PinDriver::input(esp_pins.gpio14).unwrap();
+
+        return Epd::new_explicit(sck, mosi, miso, cs_pin, dc_pin, reset_pin, busy_pin, esp_spi);
     }
 
     /// Hardware reset the display
@@ -204,6 +209,12 @@ impl<'a> Epd<'a> {
 
     /// Initialize the display
     pub fn init(&mut self) {
+        // Initial power setup
+        self.send_command(commands::POWER_SETTING);
+        self.send_command(commands::PLL_CONTROL);
+        self.send_data(0x3C);
+        self.send_command(commands::POWER_ON);
+
         // EPD hardware init start
         self.reset();
         self.read_busy();
@@ -264,11 +275,6 @@ impl<'a> Epd<'a> {
 
         self.send_command(0x2C);
         self.send_data(LUT_ALL[232]);
-    }
-
-    /// Get the display buffer size in bytes
-    pub fn buffer_size(&self) -> usize {
-        (self.width as usize * self.height as usize) / 8
     }
 
     /// Clear the display (fill with white)
@@ -492,33 +498,7 @@ fn test_code() -> anyhow::Result<()> {
 
     let peripherals = Peripherals::take()?;
 
-    // SPI pins
-    // let sck = peripherals.pins.gpio12;
-    // let mosi = peripherals.pins.gpio11;
-    // let miso = None;
-
-    // Control pins
-    // let cs_pin = PinDriver::output(peripherals.pins.gpio10)?;
-    // let dc_pin = PinDriver::output(peripherals.pins.gpio9)?;
-    // let reset_pin = PinDriver::output(peripherals.pins.gpio13)?;
-    // let busy_pin = PinDriver::input(peripherals.pins.gpio14)?;
-
-    // Initialize SPI
-    // let spi_driver = SpiDriver::new(
-    //     peripherals.spi2,
-    //     sck,
-    //     mosi,
-    //     Some(miso),
-    //     &SpiDriverConfig::default(),
-    // )?;
-
-    let spi_config = SpiConfig::new()
-        .baudrate(20.MHz().into());
-
-    // let spi_device = SpiDeviceDriver::new(spi_driver, None::<Gpio10>, &spi_config)?;
-
     // Create EPD instance
-    // let mut epd = Epd::new(sck, cs_pin, dc_pin, reset_pin, busy_pin);
     let mut epd = Epd::new(peripherals.pins, peripherals.spi2);
 
     info!("Resetting the screen...");

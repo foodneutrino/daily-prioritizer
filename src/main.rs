@@ -9,6 +9,7 @@ mod waveshare;
 mod wifi;
 
 use chrono::Local;
+use esp_idf_hal::{gpio::PinDriver, gpio::Pins, spi::SPI2};
 use log::info;
 use anyhow::Result;
 
@@ -22,24 +23,12 @@ use wifi::wifi_up;
 use waveshare::{Epd, FrameBuffer};
 
 /// Fetch and display Google Calendar events and free time slots
-fn fetch_calendar_events() {
+fn fetch_calendar_events() -> Result<()> {
     info!("--- Google Calendar ---");
 
-    let access_token = match calendar::get_credentials() {
-        Ok(token) => token,
-        Err(e) => {
-            info!("Failed to get calendar credentials: {}", e);
-            return;
-        }
-    };
+    let access_token = calendar::get_credentials()?;
 
-    let events = match calendar::get_todays_events(&access_token) {
-        Ok(events) => events,
-        Err(e) => {
-            info!("Failed to fetch calendar events: {}", e);
-            return;
-        }
-    };
+    let events = calendar::get_todays_events(&access_token)?;
 
     let (busy_periods, free_slots) = calendar::calculate_free_time(&events);
 
@@ -81,6 +70,7 @@ fn fetch_calendar_events() {
     } else {
         info!("  No free time available during working hours!");
     }
+    Ok(())
 }
 
 /// Fetch and display active Notion tasks
@@ -103,6 +93,46 @@ fn fetch_notion_tasks() -> Result<Vec<String>>{
     Ok(notion::extract_active_tasks(&datasource_response))
 }
 
+fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> {
+    
+        let sck = esp_peripheral_pins.gpio12; 
+        let mosi = esp_peripheral_pins.gpio11;
+        let miso = esp_peripheral_pins.gpio46;
+
+        // Control pins
+        let cs_pin = PinDriver::output(esp_peripheral_pins.gpio10)?;
+        let dc_pin = PinDriver::output(esp_peripheral_pins.gpio9)?;
+        let reset_pin = PinDriver::output(esp_peripheral_pins.gpio13)?;
+        let busy_pin = PinDriver::input(esp_peripheral_pins.gpio14)?;
+
+        Ok(Epd::new_explicit(sck, mosi, miso, cs_pin, dc_pin, reset_pin, busy_pin, spi))
+}
+
+fn display_todos(epd: &mut Epd, tasks: &[String]) -> Result<()> {
+    let now = Local::now();
+    info!("Date: {}\n", now.format("%A, %B %d, %Y"));
+
+    // Create framebuffer
+    let mut fb = FrameBuffer::new(epd.width(), epd.height());
+    info!("Created buffer of size: {} bytes", fb.buffer().len());
+
+    const BLACK: u8 = 0x00;
+    const WHITE: u8 = 0x01;
+
+    info!("Displaying tasks on the screen...");
+    fb.fill(WHITE);
+    let headline = format!("Tasks for {}", now.format("%B %d, %Y"));
+    let mut y = 0;
+    fb.text(&headline, 30, y, BLACK);
+    for task in tasks {
+        y += 10;
+        fb.text(task, 10, y, BLACK);
+    }
+
+    epd.display(fb.buffer());
+
+    Ok(())
+}
 fn main() -> Result<()> {
     EspLogger::initialize_default();
 
@@ -112,19 +142,19 @@ fn main() -> Result<()> {
     let now = Local::now();
     info!("Date: {}\n", now.format("%A, %B %d, %Y"));
 
-    // Setup wifi
     esp_idf_sys::link_patches();
 
     let system_peripherals = esp_idf_hal::peripherals::Peripherals::take().unwrap();
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
+
     let session_wifi = wifi_up(system_peripherals.modem, sys_loop, nvs)?;
     info!(
         "DHCP server assigned IP address: {:?}",
         session_wifi.wifi().sta_netif().get_ip_info()?
     );
 
-    // fetch_calendar_events();
+    let _ = fetch_calendar_events()?;
     info!("\n{}", "-".repeat(50));
     let tasks = fetch_notion_tasks()?;
     if !tasks.is_empty() {
@@ -140,27 +170,14 @@ fn main() -> Result<()> {
     info!("\n{}", "=".repeat(50));
     info!("Daily planning complete!");
 
-    let mut epd = Epd::new(system_peripherals.pins, system_peripherals.spi2);
+    let mut epd = set_up_display(system_peripherals.pins, system_peripherals.spi2)?;
 
     info!("Resetting the screen...");
     epd.init();
     epd.clear();
 
-    // Create framebuffer
-    let mut fb = FrameBuffer::new(epd.width(), epd.height());
-    info!("Created buffer of size: {} bytes", fb.buffer().len());
+    display_todos(&mut epd, &tasks)?;
 
-    const BLACK: u8 = 0x00;
-    const WHITE: u8 = 0x01;
-
-    info!("Displaying tasks on the screen...");
-    fb.fill(WHITE);
-    fb.text("Current Tasks", 30, 10, BLACK);
-    let mut y = 20;
-    for task in &tasks {
-        fb.text(task, 10, y, BLACK);
-        y += 10;
-    }
     // fb.pixel(30, 10, BLACK);
     // fb.hline(30, 30, 10, BLACK);
     // fb.vline(30, 50, 10, BLACK);
@@ -173,7 +190,6 @@ fn main() -> Result<()> {
     // }
     // fb.text("Line 36", 0, 288, BLACK);
 
-    epd.display(fb.buffer());
     epd.sleep();
 
     Ok(())

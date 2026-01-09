@@ -46,18 +46,28 @@ impl NotionClient {
             ("Notion-Version", NOTION_API_VERSION),
         ];
 
-        let request = client.request(Method::Get, url, &headers)?;
-            // .context("Failed to create request")?;
-        let mut response = request.submit()?;
-            // .context("Failed to submit request")?;
+        let request = client.request(Method::Get, url, &headers)
+            .context("Failed to create request")?;
+        let mut response = request.submit()
+            .context("Failed to submit request")?;
 
-        let mut body = Vec::new();
-        if response.status() == 200 {
-            response.read(&mut body)?;
+        info!("Response status: {}", response.status());
+        let mut buf = [0u8; 1024];
+        let mut body = Vec::<u8>::new();
+
+        loop {
+            match response.read(&mut buf) {
+                Ok(0) => break,
+                Ok(len) => {
+                    info!("Read {} bytes from response", len);
+                    body.extend_from_slice(&buf[..len]);
+                }
+                Err(e) => {
+                    info!("Error reading response: {:?}", e);
+                    return Err(anyhow::anyhow!("Error reading response: {:?}", e));
+                }
+            }
         }
-        
-        // response.read_to_end(&mut body)
-        //     .context("Failed to read response body")?;
 
         serde_json::from_slice(&body)
             .context("Failed to parse JSON response")
@@ -97,7 +107,7 @@ impl NotionClient {
                 }
                 Err(e) => {
                     info!("Error reading response: {:?}", e);
-                    break;
+                    return Err(anyhow::anyhow!("Error reading response: {:?}", e));
                 }
             }
         }

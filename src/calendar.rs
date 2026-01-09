@@ -3,21 +3,18 @@
 //! Fetches events from Google Calendar for the current day and calculates free time slots.
 
 use anyhow::{Context, Result};
+use log::info;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
-use embedded_svc::io::{Read, Write};
 use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
 
 // Configuration
 pub const WORK_START_HOUR: u32 = 9;
 pub const WORK_END_HOUR: u32 = 17;
 pub const CALENDAR_ID: &str = "foodneutrino@gmail.com";
-pub const SERVICE_ACCOUNT_FILE: &str = "free-time-calc-7daa6babd0ae.json";
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
 const GOOGLE_CREDS: &str = include_str!("../free-time-calc-7daa6babd0ae.json");
 
@@ -75,17 +72,22 @@ pub struct FreeSlot {
 }
 
 fn create_http_client() -> Result<Client<EspHttpConnection>> {
+    info!("Creating HTTP client");
     let config = Configuration {
         use_global_ca_store: true,
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         ..Default::default()
     };
+    info!("Creating HTTP client with config: {:?}", config);
     let connection = EspHttpConnection::new(&config)
         .context("Failed to create HTTP connection")?;
+    
+    info!("HTTP client created successfully");
     Ok(Client::wrap(connection))
 }
 
 fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
+    info!("Generating JWT for service account: {}", key.client_email);
     let now = Utc::now().timestamp();
     let claims = Claims {
         iss: key.client_email.clone(),
@@ -99,6 +101,7 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     let encoding_key = EncodingKey::from_rsa_pem(key.private_key.as_bytes())?;
 
     let jwt = encode(&header, &claims, &encoding_key).context("Failed to encode JWT")?;
+    info!("JWT generated successfully: {}", &jwt);
 
     let mut client = create_http_client()?;
 
@@ -115,19 +118,30 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
         ("Content-Length", content_length.as_str()),
     ];
 
+    info!("Requesting access token from {}", key.token_uri);
     let mut request = client.request(Method::Post, &key.token_uri, &headers)
         .context("Failed to create token request")?;
-    request.write(form_body.as_bytes())
-        .context("Failed to get request writer")?;
+    request.connection().write_all(form_body.as_bytes()).context("Failed to write request")?;
+    // request.write(form_body.as_bytes())
+    //     .context("Failed to get request writer")?;
 
     let mut response = request.submit()
         .context("Failed to request access token")?;
 
     let mut body = Vec::new();
+    let buf = &mut [0u8; 1024];
+
     if response.status() == 200 {
-        response.read(&mut body)?;
+        loop {
+            match response.read(buf) {
+                Ok(0) => break,
+                Ok(len) => body.extend_from_slice(&buf[..len]),
+                Err(e) => return Err(anyhow::anyhow!("Failed to read token response: {:?}", e)),
+            }
+        }
     }
 
+    info!("Access token response received {:?}", body);
     let token_response: TokenResponse = serde_json::from_slice(&body)
         .context("Failed to parse token response")?;
 
@@ -135,19 +149,9 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
 }
 
 pub fn get_credentials() -> Result<String> {
-    if !Path::new(SERVICE_ACCOUNT_FILE).exists() {
-        anyhow::bail!(
-            "Service account key file '{}' not found.\n\
-             Please ensure the file is in the current directory.",
-            SERVICE_ACCOUNT_FILE
-        );
-    }
-
-    let key_json = fs::read_to_string(SERVICE_ACCOUNT_FILE)
-        .context("Failed to read service account file")?;
-
+    info!("Google Credentials JSON: {}", GOOGLE_CREDS);
     let key: ServiceAccountKey =
-        serde_json::from_str(&key_json).context("Failed to parse service account JSON")?;
+        serde_json::from_str(&GOOGLE_CREDS).context("Failed to parse service account JSON")?;
 
     get_access_token(&key)
 }
@@ -183,8 +187,16 @@ pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
         .context("Failed to fetch calendar events")?;
 
     let mut body = Vec::new();
+    let buf = &mut [0u8; 1024];
+
     if response.status() == 200 {
-        response.read(&mut body).context("Failed to read calendar response")?;
+        loop {
+            match response.read(buf) {
+                Ok(0) => break,
+                Ok(len) => body.extend_from_slice(&buf[..len]),
+                Err(e) => return Err(anyhow::anyhow!("Failed to read event response: {:?}", e)),
+            }
+        }
     }
 
     let events_response: EventsResponse = serde_json::from_slice(&body)
