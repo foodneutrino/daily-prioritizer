@@ -17,10 +17,32 @@ use esp_idf_sys as _;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::sntp::{EspSntp, SntpConf};
+use std::time::Duration;
 
 use wifi::wifi_up;
 
 use waveshare::{Epd, FrameBuffer};
+
+fn sync_time() -> anyhow::Result<()> {
+    log::info!("Initializing SNTP...");
+
+    let sntp = EspSntp::new_default()?;
+
+    // Wait for time to sync (timeout after 30 seconds)
+    let mut retries = 0;
+    while sntp.get_sync_status() != esp_idf_svc::sntp::SyncStatus::Completed {
+        if retries >= 30 {
+            anyhow::bail!("SNTP sync timeout");
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        retries += 1;
+        log::info!("Waiting for SNTP sync... ({}s)", retries);
+    }
+
+    log::info!("Time synchronized!");
+    Ok(())
+}
 
 /// Fetch and display Google Calendar events and free time slots
 fn fetch_calendar_events() -> Result<()> {
@@ -154,6 +176,8 @@ fn main() -> Result<()> {
         session_wifi.wifi().sta_netif().get_ip_info()?
     );
 
+    sync_time()?;
+    
     let _ = fetch_calendar_events()?;
     info!("\n{}", "-".repeat(50));
     let tasks = fetch_notion_tasks()?;

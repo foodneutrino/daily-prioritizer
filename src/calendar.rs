@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use log::info;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use embedded_svc::http::client::Client;
+use embedded_svc::http::{Status, client::Client};
 use embedded_svc::http::Method;
 use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -76,6 +76,8 @@ fn create_http_client() -> Result<Client<EspHttpConnection>> {
     let config = Configuration {
         use_global_ca_store: true,
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+        buffer_size: Some(4096),         // Increase request buffer
+        buffer_size_tx: Some(4096),      // Increase TX buffer for headers
         ..Default::default()
     };
     info!("Creating HTTP client with config: {:?}", config);
@@ -108,14 +110,14 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     // Build form-encoded body
     let form_body = format!(
         "grant_type={}&assertion={}",
-        urlencoded("urn:ietf:params:oauth:grant-type:jwt-bearer"),
-        urlencoded(&jwt)
+        urlencoding::encode("urn:ietf:params:oauth:grant-type:jwt-bearer").into_owned(),
+        &jwt
     );
-    let content_length = form_body.len().to_string();
+
+    info!("Form body for token request: {}", &form_body);
 
     let headers = [
         ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Content-Length", content_length.as_str()),
     ];
 
     info!("Requesting access token from {}", key.token_uri);
@@ -131,20 +133,21 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     let mut body = Vec::new();
     let buf = &mut [0u8; 1024];
 
-    if response.status() == 200 {
-        loop {
-            match response.read(buf) {
-                Ok(0) => break,
-                Ok(len) => body.extend_from_slice(&buf[..len]),
-                Err(e) => return Err(anyhow::anyhow!("Failed to read token response: {:?}", e)),
-            }
+    info!("Response status: {}", response.status());
+
+    loop {
+        match response.read(buf) {
+            Ok(0) => break,
+            Ok(len) => body.extend_from_slice(&buf[..len]),
+            Err(e) => return Err(anyhow::anyhow!("Failed to read token response: {:?}", e)),
         }
     }
 
-    info!("Access token response received {:?}", body);
+    info!("Access token response received {:?}", String::from_utf8_lossy(&body));
     let token_response: TokenResponse = serde_json::from_slice(&body)
         .context("Failed to parse token response")?;
 
+    drop(client.release());
     Ok(token_response.access_token)
 }
 
@@ -157,6 +160,7 @@ pub fn get_credentials() -> Result<String> {
 }
 
 pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
+    info!("Fetching today's events from Google Calendar");
     let now = Local::now();
     let start_of_day = now
         .date_naive()
@@ -170,11 +174,12 @@ pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
     // Build URL with query parameters
     let url = format!(
         "https://www.googleapis.com/calendar/v3/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
-        urlencoded(CALENDAR_ID),
-        urlencoded(&time_min),
-        urlencoded(&time_max)
+        urlencoding::encode(CALENDAR_ID).into_owned(),
+        urlencoding::encode(&time_min).into_owned(),
+        urlencoding::encode(&time_max).into_owned()
     );
 
+    info!("Fetching today's events for start {} and end {} from URL: {}", time_min, time_max, url);
     let mut client = create_http_client()?;
     let auth_header = format!("Bearer {}", access_token);
     let headers = [
@@ -203,12 +208,6 @@ pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
         .context("Failed to parse events response")?;
 
     Ok(events_response.items.unwrap_or_default())
-}
-
-fn urlencoded(s: &str) -> String {
-    s.replace("@", "%40")
-        .replace(":", "%3A")
-        .replace("+", "%2B")
 }
 
 pub fn parse_event_time(time: &Option<EventTime>) -> Option<NaiveDateTime> {

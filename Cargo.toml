@@ -32,6 +32,7 @@ anyhow = "1"
 
 # Notion module dependencies
 dotenvy = "0.15"
+urlencoding = "2"
 
 [build-dependencies]
 embuild = "0.33"
