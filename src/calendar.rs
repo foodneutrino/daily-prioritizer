@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use log::info;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use embedded_svc::http::{Status, client::Client};
+use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
 use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};

@@ -17,12 +17,18 @@ use esp_idf_sys as _;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::sntp::{EspSntp, SntpConf};
+use esp_idf_svc::sntp::EspSntp;
 use std::time::Duration;
 
 use wifi::wifi_up;
 
 use waveshare::{Epd, FrameBuffer};
+
+use crate::calendar::FreeSlot;
+
+// Display Color Values
+const BLACK: u8 = 0x00;
+const WHITE: u8 = 0x01;
 
 fn sync_time() -> anyhow::Result<()> {
     log::info!("Initializing SNTP...");
@@ -45,7 +51,7 @@ fn sync_time() -> anyhow::Result<()> {
 }
 
 /// Fetch and display Google Calendar events and free time slots
-fn fetch_calendar_events() -> Result<()> {
+fn fetch_calendar_events() -> Result<Vec<FreeSlot>> {
     info!("--- Google Calendar ---");
 
     let access_token = calendar::get_credentials()?;
@@ -92,7 +98,7 @@ fn fetch_calendar_events() -> Result<()> {
     } else {
         info!("  No free time available during working hours!");
     }
-    Ok(())
+    Ok(free_slots)
 }
 
 /// Fetch and display active Notion tasks
@@ -130,31 +136,35 @@ fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> 
         Ok(Epd::new_explicit(sck, mosi, miso, cs_pin, dc_pin, reset_pin, busy_pin, spi))
 }
 
-fn display_todos(epd: &mut Epd, tasks: &[String]) -> Result<()> {
+fn create_todos_display(fb: &mut FrameBuffer,tasks: &[String], start_row: u32) -> Result<u32> {
     let now = Local::now();
     info!("Date: {}\n", now.format("%A, %B %d, %Y"));
 
-    // Create framebuffer
-    let mut fb = FrameBuffer::new(epd.width(), epd.height());
-    info!("Created buffer of size: {} bytes", fb.buffer().len());
-
-    const BLACK: u8 = 0x00;
-    const WHITE: u8 = 0x01;
-
     info!("Displaying tasks on the screen...");
-    fb.fill(WHITE);
     let headline = format!("Tasks for {}", now.format("%B %d, %Y"));
-    let mut y = 0;
+    let mut y = start_row;
     fb.text(&headline, 30, y, BLACK);
     for task in tasks {
         y += 10;
         fb.text(task, 10, y, BLACK);
     }
 
-    epd.display(fb.buffer());
-
-    Ok(())
+    Ok(y)
 }
+
+fn create_free_time_display(fb: &mut FrameBuffer, free_slots: &[FreeSlot], start_row: u32) -> Result<u32> {
+    info!("Displaying free time slots on the screen...");
+    let headline = format!("Today's Free Time Slots");
+    let mut y = start_row;
+    fb.text(&headline, 30, y, BLACK);
+    for slot in free_slots {
+        y += 10;
+        fb.text(&format!("{} - {}", slot.start.format("%H:%M"), slot.end.format("%H:%M")), 10, y, BLACK);
+    }
+
+    Ok(y)
+}
+
 fn main() -> Result<()> {
     EspLogger::initialize_default();
 
@@ -177,8 +187,8 @@ fn main() -> Result<()> {
     );
 
     sync_time()?;
-    
-    let _ = fetch_calendar_events()?;
+
+    let free_slots = fetch_calendar_events()?;
     info!("\n{}", "-".repeat(50));
     let tasks = fetch_notion_tasks()?;
     if !tasks.is_empty() {
@@ -200,7 +210,14 @@ fn main() -> Result<()> {
     epd.init();
     epd.clear();
 
-    display_todos(&mut epd, &tasks)?;
+    // Create framebuffer
+    let mut fb = FrameBuffer::new(epd.width(), epd.height());
+    fb.fill(0x01);
+    info!("Created buffer of size: {} bytes", fb.buffer().len());
+
+    let end_row = create_todos_display(&mut fb,&tasks, 0)?;
+    let _ = create_free_time_display(&mut fb, &free_slots, end_row + 20)?;
+    epd.display(fb.buffer());
 
     // fb.pixel(30, 10, BLACK);
     // fb.hline(30, 30, 10, BLACK);
