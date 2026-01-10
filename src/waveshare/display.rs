@@ -1,8 +1,7 @@
 use esp_idf_hal::delay::FreeRtos;
-use esp_idf_hal::gpio::{Pins, Gpio9, Gpio10, Gpio11, Gpio12, Gpio13, Gpio14, Gpio46, Input, Output, PinDriver};
+use esp_idf_hal::gpio::{InputPin, OutputPin, Output, Input, PinDriver, AnyOutputPin, AnyInputPin};
 use esp_idf_hal::spi::{SPI2, SpiDeviceDriver, SpiDriver, SpiDriverConfig, config::Config as SpiConfig};
 use esp_idf_hal::units::FromValueType;
-use esp_idf_hal::peripherals::Peripherals;
 use log::info;
 use super::font::FONT;
 
@@ -20,11 +19,10 @@ mod commands {
     pub const DATA_STOP_TRANSMISSION: u8 = 0x11;
     pub const DISPLAY_REFRESH: u8 = 0x12;
     pub const DATA_START_TRANSMISSION_2: u8 = 0x13; // Red Pixel Data
-    pub const LUT_FOR_VCOM: u8 = 0x20;
-    pub const LUT_WHITE_TO_WHITE: u8 = 0x21;
-    pub const LUT_BLACK_TO_WHITE: u8 = 0x22;
-    pub const LUT_WHITE_TO_BLACK: u8 = 0x23;
-    pub const LUT_BLACK_TO_BLACK: u8 = 0x24;
+    pub const MASTER_ACTIVATION: u8 = 0x20;
+    pub const DISPLAY_UPDATE_CONTROL_1: u8 = 0x21;
+    pub const DISPLAY_UPDATE_CONTROL_2: u8 = 0x22;
+    pub const WRITE_RAM: u8 = 0x24;
     pub const PLL_CONTROL: u8 = 0x30;
     pub const VCOM_AND_DATA_INTERVAL_SETTING: u8 = 0x50;
     pub const RESOLUTION_SETTING: u8 = 0x61;
@@ -69,12 +67,13 @@ const LUT_ALL: [u8; 233] = [
     0x32, 0x30,
 ];
 
+
 /// E-Paper Display driver for Waveshare 4.2" display
 pub struct Epd<'a> {
-    cs_pin: PinDriver<'a, Gpio10, Output>,
-    dc_pin: PinDriver<'a, Gpio9, Output>,
-    reset_pin: PinDriver<'a, Gpio13, Output>,
-    busy_pin: PinDriver<'a, Gpio14, Input>,
+    cs_pin: PinDriver<'a, AnyOutputPin, Output>,
+    dc_pin: PinDriver<'a, AnyOutputPin, Output>,
+    reset_pin: PinDriver<'a, AnyOutputPin, Output>,
+    busy_pin: PinDriver<'a, AnyInputPin, Input>,
     spi: SpiDeviceDriver<'a, SpiDriver<'a>>,
     width: u32,
     height: u32,
@@ -83,13 +82,13 @@ pub struct Epd<'a> {
 impl<'a> Epd<'a> {
     /// Create a new EPD instance with the given peripherals
     pub fn new_explicit(
-        sck: Gpio12, 
-        mosi: Gpio11, 
-        miso: Gpio46, 
-        cs_pin: PinDriver<'a, Gpio10, Output>, 
-        dc_pin: PinDriver<'a, Gpio9, Output>, 
-        reset_pin: PinDriver<'a, Gpio13, Output>, 
-        busy_pin: PinDriver<'a, Gpio14, Input>, 
+        sck: impl OutputPin,
+        mosi: impl OutputPin,
+        miso: impl InputPin + OutputPin,
+        cs: impl OutputPin,
+        dc: impl OutputPin,
+        reset: impl OutputPin,
+        busy: impl InputPin,
         esp_spi: SPI2
     ) -> Self {
         let spi_driver = SpiDriver::new(
@@ -103,9 +102,18 @@ impl<'a> Epd<'a> {
         let spi_config = SpiConfig::new()
             .baudrate(20.MHz().into());
 
-        let spi_device = SpiDeviceDriver::new(spi_driver, None::<Gpio10>, &spi_config).unwrap();
+        let spi_device = SpiDeviceDriver::new(
+            spi_driver, 
+            None::<AnyOutputPin>, 
+            &spi_config
+        ).unwrap();
 
         info!("SPI Bus Initialized successfully!");
+
+        let cs_pin = PinDriver::output(cs.downgrade_output()).unwrap();
+        let dc_pin = PinDriver::output(dc.downgrade_output()).unwrap();
+        let reset_pin = PinDriver::output(reset.downgrade_output()).unwrap();
+        let busy_pin = PinDriver::input(busy.downgrade_input()).unwrap();
 
         Self {
             cs_pin,
@@ -116,20 +124,6 @@ impl<'a> Epd<'a> {
             width: 400,
             height: 300,
         }
-    }
-
-    pub fn new(esp_pins: Pins, esp_spi: SPI2) -> Self {
-        let sck = esp_pins.gpio12; 
-        let mosi = esp_pins.gpio11;
-        let miso = esp_pins.gpio46;
-
-        // Control pins
-        let cs_pin = PinDriver::output(esp_pins.gpio10).unwrap();
-        let dc_pin = PinDriver::output(esp_pins.gpio9).unwrap();
-        let reset_pin = PinDriver::output(esp_pins.gpio13).unwrap();
-        let busy_pin = PinDriver::input(esp_pins.gpio14).unwrap();
-
-        return Epd::new_explicit(sck, mosi, miso, cs_pin, dc_pin, reset_pin, busy_pin, esp_spi);
     }
 
     /// Hardware reset the display
@@ -175,35 +169,35 @@ impl<'a> Epd<'a> {
 
     /// Turn on the display (normal mode)
     pub fn turn_on_display(&mut self) {
-        self.send_command(0x22); // Display Update Control
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_2);
         self.send_data(0xF7);
-        self.send_command(0x20); // Activate Display Update Sequence
+        self.send_command(commands::MASTER_ACTIVATION); // Activate Display Update Sequence
         self.read_busy();
     }
 
     /// Turn on the display (fast mode)
     #[allow(dead_code)]
     pub fn turn_on_display_fast(&mut self) {
-        self.send_command(0x22); // Display Update Control
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_2);
         self.send_data(0xC7);
-        self.send_command(0x20); // Activate Display Update Sequence
+        self.send_command(commands::MASTER_ACTIVATION); // Activate Display Update Sequence
         self.read_busy();
     }
 
     /// Turn on the display (partial refresh mode)
     pub fn turn_on_display_partial(&mut self) {
-        self.send_command(0x22); // Display Update Control
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_2);
         self.send_data(0xFF);
-        self.send_command(0x20); // Activate Display Update Sequence
+        self.send_command(commands::MASTER_ACTIVATION); // Activate Display Update Sequence
         self.read_busy();
     }
 
     /// Turn on the display (4-gray mode)
     #[allow(dead_code)]
     pub fn turn_on_display_4gray(&mut self) {
-        self.send_command(0x22); // Display Update Control
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_2);
         self.send_data(0xCF);
-        self.send_command(0x20); // Activate Display Update Sequence
+        self.send_command(commands::MASTER_ACTIVATION); // Activate Display Update Sequence
         self.read_busy();
     }
 
@@ -223,7 +217,7 @@ impl<'a> Epd<'a> {
         self.read_busy();
 
         // Display update control
-        self.send_command(0x21);
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_1);
         self.send_data(0x40);
         self.send_data(0x00);
 
@@ -232,7 +226,7 @@ impl<'a> Epd<'a> {
         self.send_data(0x05);
 
         // Data entry mode
-        self.send_command(0x11);
+        self.send_command(commands::DATA_STOP_TRANSMISSION);
         self.send_data(0x03); // X-mode
 
         self.send_command(0x44);
@@ -288,7 +282,7 @@ impl<'a> Epd<'a> {
         let buf_size = (self.height * linewidth) as usize;
         let white_buf = vec![0xFF_u8; buf_size];
 
-        self.send_command(0x24);
+        self.send_command(commands::WRITE_RAM);
         self.send_data_bulk(&white_buf);
 
         self.send_command(0x26);
@@ -299,7 +293,7 @@ impl<'a> Epd<'a> {
 
     /// Display an image buffer on the screen
     pub fn display(&mut self, image: &[u8]) {
-        self.send_command(0x24);
+        self.send_command(commands::WRITE_RAM);
         self.send_data_bulk(image);
 
         self.send_command(0x26);
@@ -314,7 +308,7 @@ impl<'a> Epd<'a> {
         self.send_command(0x3C); // BorderWaveform
         self.send_data(0x80);
 
-        self.send_command(0x21); // Display update control
+        self.send_command(commands::DISPLAY_UPDATE_CONTROL_1);
         self.send_data(0x00);
         self.send_data(0x00);
 
@@ -338,7 +332,7 @@ impl<'a> Epd<'a> {
         self.send_data(0x00);
         self.send_data(0x00);
 
-        self.send_command(0x24); // WRITE_RAM
+        self.send_command(commands::WRITE_RAM);
         self.send_data_bulk(image);
         self.turn_on_display_partial();
     }

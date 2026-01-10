@@ -9,7 +9,7 @@ mod waveshare;
 mod wifi;
 
 use chrono::Local;
-use esp_idf_hal::{gpio::PinDriver, gpio::Pins, spi::SPI2};
+use esp_idf_hal::{gpio::Pins, spi::SPI2};
 use log::info;
 use anyhow::Result;
 
@@ -18,6 +18,7 @@ use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::EspSntp;
+use esp_idf_sys::tzset;
 use std::time::Duration;
 
 use wifi::wifi_up;
@@ -32,6 +33,10 @@ const WHITE: u8 = 0x01;
 
 fn sync_time() -> anyhow::Result<()> {
     log::info!("Initializing SNTP...");
+
+    // Set timezone (do this before or after sync)
+    std::env::set_var("TZ", "EST5EDT,M3.2.0,M11.1.0");
+    unsafe { tzset(); }
 
     let sntp = EspSntp::new_default()?;
 
@@ -121,19 +126,17 @@ fn fetch_notion_tasks() -> Result<Vec<String>>{
     Ok(notion::extract_active_tasks(&datasource_response))
 }
 
-fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> {
-    
-        let sck = esp_peripheral_pins.gpio12; 
-        let mosi = esp_peripheral_pins.gpio11;
-        let miso = esp_peripheral_pins.gpio46;
-
-        // Control pins
-        let cs_pin = PinDriver::output(esp_peripheral_pins.gpio10)?;
-        let dc_pin = PinDriver::output(esp_peripheral_pins.gpio9)?;
-        let reset_pin = PinDriver::output(esp_peripheral_pins.gpio13)?;
-        let busy_pin = PinDriver::input(esp_peripheral_pins.gpio14)?;
-
-        Ok(Epd::new_explicit(sck, mosi, miso, cs_pin, dc_pin, reset_pin, busy_pin, spi))
+fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> {    
+        Ok(Epd::new_explicit(
+            esp_peripheral_pins.gpio12,   // any pin for sck
+            esp_peripheral_pins.gpio11,   // any pin for mosi
+            esp_peripheral_pins.gpio46,   // any pin for miso
+            esp_peripheral_pins.gpio10,   // any pin for cs
+            esp_peripheral_pins.gpio9,   // any pin for dc
+            esp_peripheral_pins.gpio13,  // any pin for reset
+            esp_peripheral_pins.gpio14,  // any pin for busy
+            spi,
+        ))
 }
 
 fn create_todos_display(fb: &mut FrameBuffer,tasks: &[String], start_row: u32) -> Result<u32> {
@@ -212,11 +215,14 @@ fn main() -> Result<()> {
 
     // Create framebuffer
     let mut fb = FrameBuffer::new(epd.width(), epd.height());
-    fb.fill(0x01);
+    fb.fill(WHITE);
     info!("Created buffer of size: {} bytes", fb.buffer().len());
 
     let end_row = create_todos_display(&mut fb,&tasks, 0)?;
-    let _ = create_free_time_display(&mut fb, &free_slots, end_row + 20)?;
+    fb.hline(0, end_row + 20, 200, BLACK);
+    let _ = create_free_time_display(&mut fb, &free_slots, end_row + 40)?;
+
+    info!("Writing FrameBuffer to display");
     epd.display(fb.buffer());
 
     // fb.pixel(30, 10, BLACK);
