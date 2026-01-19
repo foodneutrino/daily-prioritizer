@@ -218,6 +218,7 @@ pub fn parse_event_time(time: &Option<EventTime>) -> Option<NaiveDateTime> {
         if let Ok(dt) = DateTime::parse_from_rfc3339(dt_str) {
             return Some(dt.naive_local());
         }
+
         // Fallback: try parsing without timezone
         if let Ok(dt) = NaiveDateTime::parse_from_str(&dt_str[..19], "%Y-%m-%dT%H:%M:%S") {
             return Some(dt);

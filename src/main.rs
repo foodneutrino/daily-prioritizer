@@ -7,6 +7,7 @@ mod calendar;
 mod notion;
 mod waveshare;
 mod wifi;
+mod gemini;
 
 use chrono::Local;
 use esp_idf_hal::{gpio::Pins, spi::SPI2};
@@ -22,9 +23,8 @@ use esp_idf_sys::tzset;
 use std::time::Duration;
 
 use wifi::wifi_up;
-
 use waveshare::{Epd, FrameBuffer};
-
+use gemini::ScheduleItem;
 use crate::calendar::FreeSlot;
 
 // Display Color Values
@@ -126,6 +126,24 @@ fn fetch_notion_tasks() -> Result<Vec<String>>{
     Ok(notion::extract_active_tasks(&datasource_response))
 }
 
+fn ask_gemini(prompt: &str) -> Result<Vec<ScheduleItem>> {
+    info!("--- Gemini AI ---");
+
+    let api_key = match option_env!("GEMINI_API_KEY") {
+        Some(key) => key,
+        None => {
+            info!("GEMINI_API_KEY not set. Skipping Gemini AI.");
+            return Err(anyhow::anyhow!("No Gemini API Key"));
+        }
+    };
+
+    let mut gemini_client = gemini::GeminiClient::new(api_key);
+
+    let response = gemini_client.generate_content(prompt)?;
+
+    gemini::extract_schedule(&response)
+}
+
 fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> {    
         Ok(Epd::new_explicit(
             esp_peripheral_pins.gpio12,   // any pin for sck
@@ -205,6 +223,9 @@ fn main() -> Result<()> {
     }
 
     info!("\n{}", "=".repeat(50));
+
+    info!("\n Gemini says: \n {:?}", ask_gemini(gemini::DEFAULT_PROMPT));
+
     info!("Daily planning complete!");
 
     let mut epd = set_up_display(system_peripherals.pins, system_peripherals.spi2)?;
