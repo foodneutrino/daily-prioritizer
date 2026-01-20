@@ -1,10 +1,11 @@
-use serde_json;
-use serde::Serialize;
-use embedded_svc::http::client::Client;
 use anyhow::{Result, Context};
-use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
-use embedded_svc::http::Method;
 use log::info;
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::time::Duration;
+use embedded_svc::http::client::Client;
+use embedded_svc::http::Method;
+use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 
 const GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const DEFAULT_MODEL: &str = "gemini-3-flash-preview";
@@ -36,13 +37,28 @@ struct Content {
     parts: Vec<Part>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Part {
     text: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GenerateContentResponse {
+    candidates: Vec<Candidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Candidate {
+    content: ContentResponse,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContentResponse {
+    parts: Vec<Part>,
+}
+
 pub struct GeminiClient {
-    client: Client<EspHttpConnection>,
+    client: Option<Client<EspHttpConnection>>,
     api_key: String,
     model: String,
     base_url: String,
@@ -51,7 +67,7 @@ pub struct GeminiClient {
 impl GeminiClient {
     pub fn new(apikey: &str) -> Self {
         Self {
-            client: Self::create_client().unwrap(),
+            client: None,
             api_key: apikey.to_string(),
             model: DEFAULT_MODEL.to_string(),
             base_url: GEMINI_API_BASE_URL.to_string(),
@@ -62,6 +78,7 @@ impl GeminiClient {
         let config = Configuration {
             use_global_ca_store: true,
             crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+            timeout: Some(Duration::from_secs(60)),
             ..Default::default()
         };
         let connection = EspHttpConnection::new(&config)
@@ -80,6 +97,12 @@ impl GeminiClient {
     }
 
     pub fn generate_content(&mut self, prompt: &str) -> Result<String> {
+
+        if self.client.is_none() {
+            self.client = Some(Self::create_client()?);
+        }
+        let local_client = self.client.as_mut().unwrap();
+
         let url = format!(
             "{}/{}:generateContent?key={}",
             self.base_url, self.model, self.api_key
@@ -95,7 +118,6 @@ impl GeminiClient {
         let body_str = serde_json::to_string(&request_body)?;
         let content_length = body_str.len().to_string();
 
-        // let mut client = self.create_client()?;
         let auth_str = format!("x-goog-api-key:{}", self.api_key);
         let headers = [
             ("Authorization", auth_str.as_str()),
@@ -104,18 +126,24 @@ impl GeminiClient {
         ];
 
         info!("Gemini Request [URL: {}] with [body: {}]", url, body_str);
-        let mut request = self.client.request(Method::Post, &url, &headers)
-            .context("Failed to create request")?;
-        request.write(&body_str.as_bytes())
-            .context("Failed to get request writer")?;
 
-        let mut response: esp_idf_svc::http::client::Response<&mut EspHttpConnection> = request.submit()
-            .context("Failed to submit request")?;
+        let mut response = match local_client.request(Method::Post, &url, &headers) {
+            Ok(mut req) => {
+                req.write(&body_str.as_bytes()).context("Failed to get request writer")?;
+
+                req.submit().context("Failed to submit request")?
+
+            },
+            Err(e) => {
+                info!("Failed to create request: {:?}", e);
+                return Err(anyhow::anyhow!("Failed to create request: {:?}", e));
+            }
+        };
+
+        info!("Response status: {}", response.status());
 
         let mut buf = [0u8; 10240];
         let mut response_body = Vec::<u8>::new();
-        info!("Response status: {}", response.status());
-
         loop {
             match response.read(&mut buf) {
                 Ok(0) => break,
@@ -130,7 +158,16 @@ impl GeminiClient {
             }
         }
 
-        serde_json::from_slice(&response_body)
-            .context("Failed to parse JSON response")
+        self.client = None;
+
+        let response: GenerateContentResponse = serde_json::from_slice(&response_body)
+            .context("Failed to parse JSON response")?;
+
+        Ok(response
+            .candidates
+            .first()
+            .and_then(|c| c.content.parts.first())
+            .map(|p| p.text.clone())
+            .ok_or_else(|| anyhow::anyhow!("No text in response"))?)
     }
 }

@@ -1,5 +1,6 @@
 use regex::Regex;
 use anyhow::Result;
+use log::info;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleItem {
@@ -23,7 +24,9 @@ pub fn extract_schedule(input: &str) -> Result<Vec<ScheduleItem>> {
     let mut schedule = Vec::new();
 
     for line in input.lines() {
+        info!("Processing line: {}", line);
         if let Some(captures) = pattern.captures(line) {
+            info!("Adding schedule item: {} - {}: {}", &captures[1], &captures[2], &captures[3]);
             schedule.push(ScheduleItem::new(
                 &captures[1],
                 &captures[2],
