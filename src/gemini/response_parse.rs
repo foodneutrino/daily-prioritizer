@@ -20,7 +20,7 @@ impl ScheduleItem {
 }
 
 pub fn extract_schedule(input: &str) -> Result<Vec<ScheduleItem>> {
-    let pattern = Regex::new(r"--__-- (\d{1,2}:\d{2}) - (\d{1,2}:\d{2}): (.+)").unwrap();
+    let pattern = Regex::new(r"^--__-- (\d{1,2}:\d{2})[^0-9]+(\d{1,2}:\d{2}): (.+)$").unwrap();
     let mut schedule = Vec::new();
 
     for line in input.lines() {

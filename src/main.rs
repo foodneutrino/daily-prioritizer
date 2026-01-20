@@ -141,6 +141,7 @@ fn ask_gemini(prompt: &str) -> Result<Vec<ScheduleItem>> {
 
     let response = gemini_client.generate_content(prompt)?;
 
+    info!("Gemini Plan: {}", response);
     gemini::extract_schedule(&response)
 }
 
