@@ -13,6 +13,7 @@ use chrono::Local;
 use esp_idf_hal::{gpio::Pins, spi::SPI2};
 use log::info;
 use anyhow::Result;
+use minijinja::{Environment, context};
 
 use esp_idf_sys as _;
 use esp_idf_svc::log::EspLogger;
@@ -24,8 +25,8 @@ use std::time::Duration;
 
 use wifi::wifi_up;
 use waveshare::{Epd, FrameBuffer};
-use gemini::ScheduleItem;
-use crate::calendar::FreeSlot;
+use gemini::{ScheduleItem, PromptTemplate};
+use crate::{calendar::FreeSlot, gemini::DEFAULT_PROMPT};
 
 // Display Color Values
 const BLACK: u8 = 0x00;
@@ -158,6 +159,26 @@ fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> 
         ))
 }
 
+fn display_daily_plan(fb: &mut FrameBuffer, todays_tasks: &[ScheduleItem], start_row: u32) -> Result<u32> {
+    info!("Displaying today's prioritized tasks on the screen");
+
+    let mut y = start_row;
+    for item in todays_tasks.iter() {
+        let line = format!("{} - {}: {}", item.time_start, item.time_end, item.task);
+        let mut chars_to_print = line.len();
+        let mut slice_start = 0;
+        while chars_to_print > 0 {
+            let slice_end = if chars_to_print > 40 {40} else {chars_to_print};
+            let line_slice = &line[slice_start..slice_start + slice_end];
+            slice_start += slice_end;
+            y += 10;
+            fb.text(line_slice,4,y,BLACK);
+            chars_to_print -= slice_end;
+        }
+    }
+    Ok(y)
+}
+
 fn create_todos_display(fb: &mut FrameBuffer,tasks: &[String], start_row: u32) -> Result<u32> {
     let now = Local::now();
     info!("Date: {}\n", now.format("%A, %B %d, %Y"));
@@ -193,9 +214,6 @@ fn main() -> Result<()> {
     info!("Daily Prioritizer");
     info!("{}", "=".repeat(50));
 
-    let now = Local::now();
-    info!("Date: {}\n", now.format("%A, %B %d, %Y"));
-
     esp_idf_sys::link_patches();
 
     let system_peripherals = esp_idf_hal::peripherals::Peripherals::take().unwrap();
@@ -212,20 +230,26 @@ fn main() -> Result<()> {
 
     let free_slots = fetch_calendar_events()?;
     info!("\n{}", "-".repeat(50));
+
     let tasks = fetch_notion_tasks()?;
-    if !tasks.is_empty() {
-        info!("Active tasks (To Do / Doing):");
-        for task in &tasks {
-            info!("  - {}", task);
-        }
-        info!("\nTotal tasks: {}", tasks.len());
-    } else {
-        info!("No active tasks found!");
+    info!("Active tasks (To Do / Doing):");
+    for task in &tasks {
+        info!("  - {}", task);
     }
+    info!("\nTotal tasks: {}", tasks.len());
 
     info!("\n{}", "=".repeat(50));
 
-    info!("\n Gemini says: \n {:?}", ask_gemini(gemini::DEFAULT_PROMPT));
+    let prompt_data = PromptTemplate {
+        timeslots: free_slots.iter().map(|slot| format!("\t[Time: {} - {}\n]", slot.start.format("%H:%M"), slot.end.format("%H:%M"))).collect(),
+        tasks: tasks.iter().map(|task| format!("\t[Task: {}\n]", task)).collect(),
+    };
+    let rendered = Environment::new().render_str(DEFAULT_PROMPT, context! {
+        timeslots => prompt_data.timeslots,
+        tasks => prompt_data.tasks
+    })?;
+    let todays_tasks = ask_gemini(&rendered)?;
+    info!("\n Gemini says: \n {:?}", todays_tasks);
 
     info!("Daily planning complete!");
 
@@ -240,9 +264,8 @@ fn main() -> Result<()> {
     fb.fill(WHITE);
     info!("Created buffer of size: {} bytes", fb.buffer().len());
 
-    let end_row = create_todos_display(&mut fb,&tasks, 0)?;
+    let end_row = display_daily_plan(&mut fb, &todays_tasks, 0)?;
     fb.hline(0, end_row + 20, 200, BLACK);
-    let _ = create_free_time_display(&mut fb, &free_slots, end_row + 40)?;
 
     info!("Writing FrameBuffer to display");
     epd.display(fb.buffer());

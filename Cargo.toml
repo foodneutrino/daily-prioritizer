@@ -32,6 +32,9 @@ anyhow = "1"
 dotenvy = "0.15"
 urlencoding = "2"
 
+# gemini
+minijinja = "1.0"
+
 [build-dependencies]
 embuild = "0.33"
 

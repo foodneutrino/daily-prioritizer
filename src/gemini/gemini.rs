@@ -14,18 +14,22 @@ pub const DEFAULT_PROMPT: &str = r#"
 I want you to act as a high-performance productivity coach. I have a list of tasks and specific free time windows. Your goal is to break these tasks into chunks of 15–30 minutes so I can make progress without feeling overwhelmed.
 
 My Tasks:
-    [Task 1: 2025 taxes]
-    [Task 2: costa rica weekend plan]
+    {{tasks}}
 
 My Free Time Slots:
-    [Time 1: 14:00 - 15:00]
-    [Time 2: 17:00 - 19:00]
+    {{timeslots}}
 
 Requirements:
     Decompose: Break each task into a sequence of 'Micro-Steps.' No step should take more than 20 minutes.
     Energy Mapping: Match high-effort brain tasks to my morning slot and physical/administrative tasks to my afternoon slot.
-    Format: Present this as a chronological schedule with each task clearly identified with --__-- at the start of the line."
+    Format: Present this as a chronological schedule. I need to programmatically process the response so identify the format should be '--__-- HH:MM - HH:MM: Task to do"
 "#;
+
+#[derive(Serialize)]
+pub struct PromptTemplate {
+    pub timeslots: Vec<String>,
+    pub tasks: Vec<String>,
+}
 
 #[derive(Debug, Serialize)]
 struct GenerateContentRequest {
