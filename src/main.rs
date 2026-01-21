@@ -9,7 +9,6 @@ mod waveshare;
 mod wifi;
 mod gemini;
 
-use chrono::Local;
 use esp_idf_hal::{gpio::Pins, spi::SPI2};
 use log::info;
 use anyhow::Result;
@@ -33,7 +32,7 @@ const BLACK: u8 = 0x00;
 const WHITE: u8 = 0x01;
 
 fn sync_time() -> anyhow::Result<()> {
-    log::info!("Initializing SNTP...");
+    info!(".. Initializing SNTP");
 
     // Set timezone (do this before or after sync)
     std::env::set_var("TZ", "EST5EDT,M3.2.0,M11.1.0");
@@ -49,10 +48,9 @@ fn sync_time() -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_secs(1));
         retries += 1;
-        log::info!("Waiting for SNTP sync... ({}s)", retries);
+        info!("Waiting for SNTP sync... ({}s)", retries);
     }
 
-    log::info!("Time synchronized!");
     Ok(())
 }
 
@@ -162,49 +160,18 @@ fn set_up_display(esp_peripheral_pins: Pins, spi: SPI2) -> Result<Epd<'static>> 
 fn display_daily_plan(fb: &mut FrameBuffer, todays_tasks: &[ScheduleItem], start_row: u32) -> Result<u32> {
     info!("Displaying today's prioritized tasks on the screen");
 
+    const LINE_WIDTH: usize = 50;
+
     let mut y = start_row;
-    for item in todays_tasks.iter() {
-        let line = format!("{} - {}: {}", item.time_start, item.time_end, item.task);
-        let mut chars_to_print = line.len();
-        let mut slice_start = 0;
-        while chars_to_print > 0 {
-            let slice_end = if chars_to_print > 40 {40} else {chars_to_print};
-            let line_slice = &line[slice_start..slice_start + slice_end];
-            slice_start += slice_end;
+    for item in todays_tasks {
+        let line = format!("{}-{}: {}", item.time_start, item.time_end, item.task);
+        let chars: Vec<char> = line.chars().collect();
+        for chunk in chars.chunks(LINE_WIDTH) {
             y += 10;
-            fb.text(line_slice,4,y,BLACK);
-            chars_to_print -= slice_end;
+            let chunk_str: String = chunk.iter().collect();
+            fb.text(&chunk_str, 2, y, BLACK);
         }
     }
-    Ok(y)
-}
-
-fn create_todos_display(fb: &mut FrameBuffer,tasks: &[String], start_row: u32) -> Result<u32> {
-    let now = Local::now();
-    info!("Date: {}\n", now.format("%A, %B %d, %Y"));
-
-    info!("Displaying tasks on the screen...");
-    let headline = format!("Tasks for {}", now.format("%B %d, %Y"));
-    let mut y = start_row;
-    fb.text(&headline, 30, y, BLACK);
-    for task in tasks {
-        y += 10;
-        fb.text(task, 10, y, BLACK);
-    }
-
-    Ok(y)
-}
-
-fn create_free_time_display(fb: &mut FrameBuffer, free_slots: &[FreeSlot], start_row: u32) -> Result<u32> {
-    info!("Displaying free time slots on the screen...");
-    let headline = format!("Today's Free Time Slots");
-    let mut y = start_row;
-    fb.text(&headline, 30, y, BLACK);
-    for slot in free_slots {
-        y += 10;
-        fb.text(&format!("{} - {}", slot.start.format("%H:%M"), slot.end.format("%H:%M")), 10, y, BLACK);
-    }
-
     Ok(y)
 }
 
@@ -212,7 +179,6 @@ fn main() -> Result<()> {
     EspLogger::initialize_default();
 
     info!("Daily Prioritizer");
-    info!("{}", "=".repeat(50));
 
     esp_idf_sys::link_patches();
 
@@ -222,67 +188,52 @@ fn main() -> Result<()> {
 
     let session_wifi = wifi_up(system_peripherals.modem, sys_loop, nvs)?;
     info!(
-        "DHCP server assigned IP address: {:?}",
+        ".. DHCP server assigned IP address: {:?}",
         session_wifi.wifi().sta_netif().get_ip_info()?
     );
 
     sync_time()?;
 
-    let free_slots = fetch_calendar_events()?;
-    info!("\n{}", "-".repeat(50));
+    info!(".. Initialize Display");
+    let mut epd = set_up_display(system_peripherals.pins, system_peripherals.spi2)?;
+    epd.init();
+    epd.clear();
 
-    let tasks = fetch_notion_tasks()?;
-    info!("Active tasks (To Do / Doing):");
-    for task in &tasks {
-        info!("  - {}", task);
-    }
-    info!("\nTotal tasks: {}", tasks.len());
-
-    info!("\n{}", "=".repeat(50));
+    info!("Setup Complete\n{}", "=".repeat(50));
 
     let prompt_data = PromptTemplate {
-        timeslots: free_slots.iter().map(|slot| format!("\t[Time: {} - {}\n]", slot.start.format("%H:%M"), slot.end.format("%H:%M"))).collect(),
-        tasks: tasks.iter().map(|task| format!("\t[Task: {}\n]", task)).collect(),
+        timeslots: fetch_calendar_events()?.iter().map(|slot| format!("\t[Time: {} - {}\n]", slot.start.format("%H:%M"), slot.end.format("%H:%M"))).collect(),
+        tasks: fetch_notion_tasks()?.iter().map(|task| format!("\t[Task: {}\n]", task)).collect(),
     };
     let rendered = Environment::new().render_str(DEFAULT_PROMPT, context! {
         timeslots => prompt_data.timeslots,
         tasks => prompt_data.tasks
     })?;
     let todays_tasks = ask_gemini(&rendered)?;
-    info!("\n Gemini says: \n {:?}", todays_tasks);
+    info!("\n Gemini Tasks: \n {:?}", todays_tasks);
+    info!("Daily planning complete - Displaying Results");
 
-    info!("Daily planning complete!");
-
-    let mut epd = set_up_display(system_peripherals.pins, system_peripherals.spi2)?;
-
-    info!("Resetting the screen...");
-    epd.init();
-    epd.clear();
-
-    // Create framebuffer
+    // Clear screen and display tasks
     let mut fb = FrameBuffer::new(epd.width(), epd.height());
     fb.fill(WHITE);
-    info!("Created buffer of size: {} bytes", fb.buffer().len());
-
     let end_row = display_daily_plan(&mut fb, &todays_tasks, 0)?;
     fb.hline(0, end_row + 20, 200, BLACK);
 
     info!("Writing FrameBuffer to display");
     epd.display(fb.buffer());
-
-    // fb.pixel(30, 10, BLACK);
-    // fb.hline(30, 30, 10, BLACK);
-    // fb.vline(30, 50, 10, BLACK);
-    // fb.line(30, 70, 40, 80, BLACK);
-    // fb.rect(30, 90, 10, 10, BLACK);
-    // fb.fill_rect(30, 110, 10, 10, BLACK);
-    // for row in 0..36 {
-    //     let row_str = row.to_string();
-    //     fb.text(&row_str, 0, row * 8, BLACK);
-    // }
-    // fb.text("Line 36", 0, 288, BLACK);
-
     epd.sleep();
 
     Ok(())
 }
+
+// fb.pixel(30, 10, BLACK);
+// fb.hline(30, 30, 10, BLACK);
+// fb.vline(30, 50, 10, BLACK);
+// fb.line(30, 70, 40, 80, BLACK);
+// fb.rect(30, 90, 10, 10, BLACK);
+// fb.fill_rect(30, 110, 10, 10, BLACK);
+// for row in 0..36 {
+//     let row_str = row.to_string();
+//     fb.text(&row_str, 0, row * 8, BLACK);
+// }
+// fb.text("Line 36", 0, 288, BLACK);
