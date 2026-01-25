@@ -13,6 +13,7 @@ use esp_idf_hal::{gpio::Pins, spi::SPI2};
 use log::info;
 use anyhow::Result;
 use minijinja::{Environment, context};
+use chrono::{Local, Duration as ChronoDuration};
 
 use esp_idf_sys as _;
 use esp_idf_svc::log::EspLogger;
@@ -63,11 +64,6 @@ fn fetch_calendar_events() -> Result<Vec<FreeSlot>> {
     let events = calendar::get_todays_events(&access_token)?;
 
     let (busy_periods, free_slots) = calendar::calculate_free_time(&events);
-
-    info!(
-        "Working hours: {}:00 - {}:00",
-        calendar::WORK_START_HOUR, calendar::WORK_END_HOUR
-    );
 
     if !busy_periods.is_empty() {
         info!("\nScheduled events:");
@@ -201,29 +197,47 @@ fn main() -> Result<()> {
 
     info!("Setup Complete\n{}", "=".repeat(50));
 
-    let prompt_data = PromptTemplate {
-        timeslots: fetch_calendar_events()?.iter().map(|slot| format!("\t[Time: {} - {}\n]", slot.start.format("%H:%M"), slot.end.format("%H:%M"))).collect(),
-        tasks: fetch_notion_tasks()?.iter().map(|task| format!("\t[Task: {}\n]", task)).collect(),
-    };
-    let rendered = Environment::new().render_str(DEFAULT_PROMPT, context! {
-        timeslots => prompt_data.timeslots,
-        tasks => prompt_data.tasks
-    })?;
-    let todays_tasks = ask_gemini(&rendered)?;
-    info!("\n Gemini Tasks: \n {:?}", todays_tasks);
-    info!("Daily planning complete - Displaying Results");
+    loop {
+        // Clear screen and display tasks
+        let mut fb = FrameBuffer::new(epd.width(), epd.height());
+        fb.fill(WHITE);
+        let mut end_row = 0;
 
-    // Clear screen and display tasks
-    let mut fb = FrameBuffer::new(epd.width(), epd.height());
-    fb.fill(WHITE);
-    let end_row = display_daily_plan(&mut fb, &todays_tasks, 0)?;
-    fb.hline(0, end_row + 20, 200, BLACK);
+        let prompt_data = PromptTemplate {
+            timeslots: fetch_calendar_events()?.iter().map(|slot| format!("\t[Time: {} - {}\n]", slot.start.format("%H:%M"), slot.end.format("%H:%M"))).collect(),
+            tasks: fetch_notion_tasks()?.iter().map(|task| format!("\t[Task: {}\n]", task)).collect(),
+        };
+        let rendered = Environment::new().render_str(DEFAULT_PROMPT, context! {
+            timeslots => prompt_data.timeslots,
+            tasks => prompt_data.tasks
+        })?;
+        let now = Local::now();
+        let mut next_run: chrono::DateTime<Local>;
+        match ask_gemini(&rendered) {
+            Err(e) => {
+                info!("Error querying Gemini AI: {}, retry in 1 hour", e);
+                next_run = now + ChronoDuration::hours(1);
+            }
+            Ok(todays_tasks) => {
+                info!("\n Gemini Tasks: \n {:?}", todays_tasks);
+                info!("Daily planning complete - Displaying Results");
+                end_row = display_daily_plan(&mut fb, &todays_tasks, 0)?;
+                fb.hline(0, end_row + 20, 200, BLACK);
 
-    info!("Writing FrameBuffer to display");
-    epd.display(fb.buffer());
-    epd.sleep();
+                info!("Writing FrameBuffer to display");
+                epd.display(fb.buffer());
+                epd.sleep();
+                next_run = (now + ChronoDuration::days(1))
+                    .date_naive()
+                    .and_hms_opt(3, 0, 0).unwrap()
+                    .and_local_timezone(Local).unwrap();
+            }
+        }
 
-    Ok(())
+        let wait_duration = next_run - now;
+        info!("Next run at: {}", next_run.format("%Y-%m-%d %H:%M:%S"));
+        std::thread::sleep(wait_duration.to_std()?);
+    }
 }
 
 // fb.pixel(30, 10, BLACK);

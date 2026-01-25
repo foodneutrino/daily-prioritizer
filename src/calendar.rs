@@ -3,7 +3,7 @@
 //! Fetches events from Google Calendar for the current day and calculates free time slots.
 
 use anyhow::{Context, Result};
-use log::info;
+use log::{info, debug};
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
@@ -12,11 +12,11 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
 // Configuration
-pub const WORK_START_HOUR: u32 = 9;
-pub const WORK_END_HOUR: u32 = 17;
-pub const CALENDAR_ID: &str = "foodneutrino@gmail.com";
+const WORK_START_HOUR: u32 = 9;
+const WORK_END_HOUR: u32 = 17;
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
-const GOOGLE_CREDS: &str = include_str!("../free-time-calc-7daa6babd0ae.json");
+const CALENDAR_ID: &str = "dave@chartbeat.com";
+const GOOGLE_CREDS: &str = include_str!("../dml-daily-priorities-c2cd7a03bb4a.json");
 
 #[derive(Debug, Deserialize)]
 struct ServiceAccountKey {
@@ -80,7 +80,7 @@ fn create_http_client() -> Result<Client<EspHttpConnection>> {
         buffer_size_tx: Some(4096),      // Increase TX buffer for headers
         ..Default::default()
     };
-    info!("Creating HTTP client with config: {:?}", config);
+    debug!("Creating HTTP client with config: {:?}", config);
     let connection = EspHttpConnection::new(&config)
         .context("Failed to create HTTP connection")?;
     
@@ -114,7 +114,7 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
         &jwt
     );
 
-    info!("Form body for token request: {}", &form_body);
+    debug!("Form body for token request: {}", &form_body);
 
     let headers = [
         ("Content-Type", "application/x-www-form-urlencoded"),
@@ -133,7 +133,7 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
     let mut body = Vec::new();
     let buf = &mut [0u8; 1024];
 
-    info!("Response status: {}", response.status());
+    debug!("Response status: {}", response.status());
 
     loop {
         match response.read(buf) {
@@ -143,9 +143,9 @@ fn get_access_token(key: &ServiceAccountKey) -> Result<String> {
         }
     }
 
-    info!("Access token response received {:?}", String::from_utf8_lossy(&body));
     let token_response: TokenResponse = serde_json::from_slice(&body)
         .context("Failed to parse token response")?;
+    debug!("Access token response received {:?}", String::from_utf8_lossy(&body));
 
     drop(client.release());
     Ok(token_response.access_token)
@@ -179,13 +179,13 @@ pub fn get_todays_events(access_token: &str) -> Result<Vec<Event>> {
         urlencoding::encode(&time_max).into_owned()
     );
 
-    info!("Fetching today's events for start {} and end {} from URL: {}", time_min, time_max, url);
     let mut client = create_http_client()?;
     let auth_header = format!("Bearer {}", access_token);
     let headers = [
         ("Authorization", auth_header.as_str()),
     ];
 
+    debug!("Requesting events from URL: {} with auth header {}", &url, &auth_header);
     let request = client.request(Method::Get, &url, &headers)
         .context("Failed to create calendar request")?;
     let mut response = request.submit()
